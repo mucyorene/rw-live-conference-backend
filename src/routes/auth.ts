@@ -29,8 +29,9 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
       { expiresIn: '7d' }
     );
     res.status(201).json({ token });
-  } catch {
-    res.status(409).json({ error: 'Username or email already exists' });
+  } catch (e: any) {
+    console.error('Register error:', e.message);
+    res.status(409).json({ error: e.message });
   }
 });
 
