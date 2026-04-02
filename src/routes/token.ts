@@ -1,47 +1,22 @@
 import { Router, Response } from 'express';
+import { AccessToken } from 'livekit-server-sdk';
 import db from '../db';
 import authMiddleware from '../middleware/auth';
 import { AuthRequest, Room } from '../types';
 
 const router = Router();
 
-router.use(authMiddleware);
-
-// GET /rooms
-router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
-  const result = await db.query<Room>(`
-    SELECT rooms.*, users.username as host
-    FROM rooms
-    JOIN users ON rooms.created_by = users.id
-    ORDER BY rooms.created_at DESC
-  `);
-  res.json(result.rows);
-});
-
-// POST /rooms
-router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
-  const { name } = req.body;
-  if (!name) {
-    res.status(400).json({ error: 'Room name required' });
+// POST /token
+router.post('/', authMiddleware, async (req: AuthRequest, res: Response): Promise<void> => {
+  const { roomName, canPublish = false } = req.body;
+  if (!roomName) {
+    res.status(400).json({ error: 'roomName required' });
     return;
   }
 
-  try {
-    const result = await db.query<Room>(
-      'INSERT INTO rooms (name, created_by) VALUES ($1, $2) RETURNING *',
-      [name, req.user!.id]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch {
-    res.status(409).json({ error: 'Room name already exists' });
-  }
-});
-
-// DELETE /rooms/:id
-router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   const result = await db.query<Room>(
-    'SELECT * FROM rooms WHERE id = $1',
-    [req.params.id]
+    'SELECT * FROM rooms WHERE name = $1',
+    [roomName]
   );
   const room = result.rows[0];
 
@@ -49,13 +24,22 @@ router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => 
     res.status(404).json({ error: 'Room not found' });
     return;
   }
-  if (room.created_by !== req.user!.id) {
-    res.status(403).json({ error: 'Not authorized' });
-    return;
-  }
 
-  await db.query('DELETE FROM rooms WHERE id = $1', [req.params.id]);
-  res.json({ message: 'Room deleted' });
+  const at = new AccessToken(
+    process.env.LIVEKIT_API_KEY!,
+    process.env.LIVEKIT_API_SECRET!,
+    { identity: req.user!.username }
+  );
+
+  at.addGrant({
+    roomJoin: true,
+    room: roomName,
+    canPublish,
+    canSubscribe: true,
+  });
+
+  const token = await at.toJwt();
+  res.json({ token, wsUrl: process.env.LIVEKIT_WS_URL });
 });
 
 export default router;
